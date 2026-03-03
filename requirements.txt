@@ -1,0 +1,11 @@
+click==8.1.7
+typer==0.12.5
+pydantic==2.9.2
+pydantic-settings==2.5.2
+loguru==0.7.2
+python-dotenv==1.0.1
+requests==2.32.3
+SQLAlchemy==2.0.32
+
+pyrogram==2.0.106      # Telegram MTProto-клиент (как мобильное приложение)
+tgcrypto==1.2.5        # ускорение шифрования (быстрее и стабильнее)

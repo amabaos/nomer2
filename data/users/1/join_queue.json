@@ -1,0 +1,44 @@
+[
+  {
+    "id": "923109f7-d5d8-44e8-90c1-4195efd0543f",
+    "group": "KYIV_WORK",
+    "handle": "@cum_bebra",
+    "status": "queued",
+    "assigned_account_id": null,
+    "tries": 0,
+    "next_try_at": null,
+    "resolved_chat_id": null,
+    "resolved_title": null,
+    "resolved_username": null,
+    "last_error": null,
+    "updated_at": "2026-03-03 01:28:44.158825"
+  },
+  {
+    "id": "f83c8796-328a-4905-b6ac-b7cdef38522b",
+    "group": "KYIV_WORK",
+    "handle": "https://t.me/+mTk5lZJNYpZjMTM6",
+    "status": "queued",
+    "assigned_account_id": null,
+    "tries": 0,
+    "next_try_at": null,
+    "resolved_chat_id": null,
+    "resolved_title": null,
+    "resolved_username": null,
+    "last_error": null,
+    "updated_at": "2026-03-03 01:28:44.158825"
+  },
+  {
+    "id": "b45c224e-474b-4fcf-9f2a-1300fb069807",
+    "group": "KYIV_WORK",
+    "handle": "@fbvbcvbcq",
+    "status": "queued",
+    "assigned_account_id": null,
+    "tries": 0,
+    "next_try_at": null,
+    "resolved_chat_id": null,
+    "resolved_title": null,
+    "resolved_username": null,
+    "last_error": null,
+    "updated_at": "2026-03-03 01:28:44.158825"
+  }
+]

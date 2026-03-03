@@ -1,0 +1,26 @@
+[
+  {
+    "id": 1,
+    "stage": "Stage 3",
+    "phone": "380995238921",
+    "username": null,
+    "name": null,
+    "proxy": "socks5://5t7edlii6p:mrJLkp2bIrB5h2L8@lpm-dedic-18.asocks-servers.net:16457",
+    "session_path": "data\\users\\1\\accounts\\1\\session.session",
+    "status": "active",
+    "dedupe_enabled": true,
+    "dedupe_window_hours": 24
+  },
+  {
+    "id": 2,
+    "stage": "Stage 1",
+    "phone": "+380990015395",
+    "username": null,
+    "name": null,
+    "proxy": null,
+    "session_path": "data\\users\\1\\accounts\\2\\session.session",
+    "status": "active",
+    "dedupe_enabled": true,
+    "dedupe_window_hours": 24
+  }
+]

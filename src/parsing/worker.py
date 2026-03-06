@@ -183,6 +183,7 @@ class ParserWorker:
                 message_id=msg.id,
                 matched_groups=matched_groups,
                 matched_keyword=matched_keyword,
+                parser_account=f"#{self.account.id} ({self.account.phone})",
             )
 
             # 5) Приводим кнопки к формату "строки"
@@ -197,11 +198,14 @@ class ParserWorker:
             ])
 
             # 7) Отправляем
-            await send_lead_html(
+            sent_ok = await send_lead_html(
                 chat_id=settings.service_chat_id,
                 text_html=payload["text"],
                 buttons=payload["buttons"],
             )
+            if not sent_ok:
+                logger.error(f"[{self.account.stage}] send failed chat={chat_id} msg={msg.id}")
+                return False
 
             # 8) Записываем в БД
             db.add(ProcessedMessage(chat_id=chat_id, message_id=msg.id))

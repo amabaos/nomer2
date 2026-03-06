@@ -102,7 +102,7 @@ class JoinRunner:
                 # Pyrogram FloodWait.seconds
                 seconds = int(getattr(fw, "value", None) or getattr(fw, "x", None) or getattr(fw, "seconds", 60))
                 self.cooldowns[aid] = time.time() + seconds + 2
-                mark_failed(task_id, f"FloodWait {seconds}s (re-import later if needed)")
+                mark_failed(task_id, f"FloodWait {seconds}s", status="floodwait")
                 logger.warning(f"[JOIN] acc#{aid} floodwait {seconds}s, cooldown set")
 
             except Exception as e:

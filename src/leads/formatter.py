@@ -13,6 +13,7 @@ def build_lead_message(
     # НОВОЕ (опционально)
     matched_groups: Optional[List[str]] = None,
     matched_keyword: Optional[str] = None,
+    parser_account: Optional[str] = None,
 ) -> Dict[str, object]:
     """
     Собирает текст лида + набор кнопок.
@@ -23,6 +24,8 @@ def build_lead_message(
 
     lines: List[str] = []
     lines.append("🔔 Новый лид!")
+    if parser_account:
+        lines.append(f"Аккаунт: {parser_account}")
 
     # --- ЧАТ ---
     if chat_username:

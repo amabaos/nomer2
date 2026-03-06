@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # Пока жёстко под MVP: один владелец user_id=1
@@ -103,13 +104,20 @@ def add_chat(group_name: str, chat: Dict[str, Any]) -> None:
     if chat_id is None:
         raise ValueError("chat.id обязателен")
 
+    normalized = dict(chat)
+    normalized.setdefault("active", True)
+    normalized.setdefault("added_at", datetime.utcnow().isoformat())
+
     for c in chats:
         if c.get("id") == chat_id:
-            c.update(chat)
+            prev_added_at = c.get("added_at")
+            c.update(normalized)
+            if prev_added_at:
+                c["added_at"] = prev_added_at
             upsert_group(g)
             return
 
-    chats.append(chat)
+    chats.append(normalized)
     g["chats"] = chats
     upsert_group(g)
 
@@ -122,3 +130,23 @@ def remove_chat(group_name: str, chat_id: int) -> None:
     chats = [c for c in (g.get("chats") or []) if c.get("id") != chat_id]
     g["chats"] = chats
     upsert_group(g)
+
+
+def set_chat_active(chat_id: int, active: bool) -> int:
+    groups = load_groups()
+    changed = 0
+
+    for g in groups:
+        chats = g.get("chats") or []
+        for c in chats:
+            if c.get("id") != chat_id:
+                continue
+            old = bool(c.get("active", True))
+            new = bool(active)
+            if old != new:
+                c["active"] = new
+                changed += 1
+
+    if changed:
+        save_groups(groups)
+    return changed

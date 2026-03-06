@@ -2,6 +2,7 @@ import typer
 from getpass import getpass
 from pathlib import Path
 import uuid
+import threading
 
 from src.leads.formatter import build_lead_message
 from src.leads.notifier import send_lead_html
@@ -38,6 +39,10 @@ from src.groups.runtime import collect_active_chat_ids
 from src.join.models import JoinTask
 from src.join.repo import add_tasks, stats as join_stats_repo, reset_all_to_queued
 from src.join.service import run_join_workers
+from src.stats_service import collect_system_stats
+from src.db.database import engine
+from src.db.models import Base
+from src.bot.callbacks import run_bot_updates_loop
 
 
 app = typer.Typer(help="ПАРСЕР — консольное управление (MVP)")
@@ -99,16 +104,13 @@ def send_test(
     typer.echo("\n=== Сообщение ===\n" + payload["text"])
     typer.echo("\n=== Кнопки ===")
 
-    for row in payload.get("buttons", []):
-        line = []
-        for btn in row:
-            if "url" in btn:
-                line.append(f"{btn['text']} -> {btn['url']}")
-            elif "callback_data" in btn:
-                line.append(f"{btn['text']} -> {btn['callback_data']}")
-            else:
-                line.append(btn.get("text", "<?>"))
-        typer.echo(" | ".join(line))
+    for btn in payload.get("buttons", []):
+        if "url" in btn:
+            typer.echo(f"{btn['text']} -> {btn['url']}")
+        elif "callback_data" in btn:
+            typer.echo(f"{btn['text']} -> {btn['callback_data']}")
+        else:
+            typer.echo(btn.get("text", "<?>"))
 
 
 @app.command("send-telegram-test")
@@ -221,10 +223,32 @@ def accounts_list():
         return
     for a in accs:
         typer.echo(
-            f"#{a.id} | {a.stage} | {a.phone} | status={a.status} | proxy={'yes' if a.proxy else 'no'} | max_chats={getattr(a, 'max_chats', 250)}"
+            f"#{a.id} | {a.stage} | {a.phone} | status={a.status} | reason={getattr(a, 'status_reason', None)} | proxy={'yes' if a.proxy else 'no'} | max_chats={getattr(a, 'max_chats', 250)}"
         )
 
 
+
+
+@app.command("accounts-set-status")
+def accounts_set_status(
+    account_id: int = typer.Option(...),
+    status: str = typer.Option(..., help="active/paused/disabled/error/authorization_required/inactive"),
+    reason: str = typer.Option(None, help="Причина/комментарий"),
+):
+    allowed = {"active", "paused", "disabled", "error", "authorization_required", "inactive"}
+    status = (status or "").strip().lower()
+    if status not in allowed:
+        raise typer.BadParameter(f"Неверный статус: {status}")
+
+    acc = get_account(account_id)
+    if not acc:
+        typer.echo("Аккаунт не найден")
+        raise typer.Exit(code=1)
+
+    acc.status = status
+    acc.status_reason = reason
+    upsert_account(acc)
+    typer.echo("OK")
 @app.command("accounts-set-maxchats")
 def accounts_set_maxchats(
     account_id: int = typer.Option(...),
@@ -242,11 +266,29 @@ def accounts_set_maxchats(
 
 # -------------------- RUN --------------------
 
+@app.command("parser-run")
+def parser_run():
+    """Запускает все активные аккаунты и начинает парсинг."""
+    import asyncio
+    from src.leads.pipeline import run_all_workers
+    Base.metadata.create_all(bind=engine)
+    asyncio.run(run_all_workers())
+
+
+@app.command("bot-run")
+def bot_run():
+    """Запуск bot long-polling (команды + callback)."""
+    Base.metadata.create_all(bind=engine)
+    run_bot_updates_loop()
+
+
 @app.command("run")
 def run_all():
-    """
-    Запускает все активные аккаунты и начинает парсинг.
-    """
+    """Полный запуск: bot-loop в фоне + parser в основном потоке."""
+    Base.metadata.create_all(bind=engine)
+    t = threading.Thread(target=run_bot_updates_loop, daemon=True)
+    t.start()
+
     import asyncio
     from src.leads.pipeline import run_all_workers
     asyncio.run(run_all_workers())
@@ -551,8 +593,7 @@ def join_stats():
     s = join_stats_repo()
     typer.echo(f"total={s.get('total', 0)}")
     for k in ["queued", "in_progress", "joined", "already", "pending_request", "floodwait", "failed"]:
-        if k in s:
-            typer.echo(f"{k}={s[k]}")
+        typer.echo(f"{k}={s.get(k, 0)}")
 
 
 @app.command("join-reset")
@@ -580,3 +621,20 @@ def join_run(
 
     import asyncio
     asyncio.run(run_join_workers(acc_ids, min_delay=min_delay, max_delay=max_delay))
+
+@app.command("stats")
+def stats_system():
+    s = collect_system_stats()
+    typer.echo("=== SYSTEM STATS ===")
+    typer.echo(f"accounts_total={s['accounts_total']}")
+    typer.echo(f"accounts_active={s['accounts_active']}")
+    typer.echo(f"accounts_paused={s['accounts_paused']}")
+    typer.echo(f"accounts_disabled={s['accounts_disabled']}")
+    typer.echo(f"accounts_error={s['accounts_error']}")
+    typer.echo(f"chats_monitored={s['chats_monitored']}")
+    typer.echo(f"leads_sent_total={s['leads_sent_total']}")
+    typer.echo(f"blacklist_total={s['blacklist_total']}")
+    js = s['join']
+    typer.echo(f"join_total={js.get('total', 0)}")
+    for k in ["queued", "in_progress", "joined", "already", "pending_request", "floodwait", "failed"]:
+        typer.echo(f"join_{k}={js.get(k, 0)}")

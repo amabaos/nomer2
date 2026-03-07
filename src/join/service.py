@@ -1,10 +1,9 @@
-import asyncio
 from typing import List
 
 from loguru import logger
 
 from src.accounts.repo import get_account
-from src.join.worker import JoinWorker
+from src.join.worker import JoinRunner
 
 
 async def run_join_workers(account_ids: List[int], *, min_delay: float = 2.0, max_delay: float = 7.0):
@@ -23,9 +22,5 @@ async def run_join_workers(account_ids: List[int], *, min_delay: float = 2.0, ma
         logger.warning("[JOIN] нет активных аккаунтов для join")
         return
 
-    tasks = []
-    for acc in accounts:
-        w = JoinWorker(acc, min_delay=min_delay, max_delay=max_delay)
-        tasks.append(asyncio.create_task(w.run()))
-
-    await asyncio.gather(*tasks)
+    runner = JoinRunner([a.id for a in accounts], poll_seconds=max(1, int(min_delay)))
+    await runner.run()

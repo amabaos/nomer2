@@ -9,6 +9,7 @@ from src.accounts.repo import get_account
 from src.gateways.telegram_client import make_client
 from src.groups.repo import add_chat as groups_add_chat_repo
 from src.join.repo import pick_next_task, mark_done, mark_failed
+from src.runtime_settings import load_runtime_settings
 
 
 def _norm_handle(line: str) -> Optional[str]:
@@ -102,11 +103,12 @@ class JoinRunner:
                 # Pyrogram FloodWait.seconds
                 seconds = int(getattr(fw, "value", None) or getattr(fw, "x", None) or getattr(fw, "seconds", 60))
                 self.cooldowns[aid] = time.time() + seconds + 2
-                mark_failed(task_id, f"FloodWait {seconds}s (re-import later if needed)")
+                mark_failed(task_id, f"FloodWait {seconds}s", status="queued")
                 logger.warning(f"[JOIN] acc#{aid} floodwait {seconds}s, cooldown set")
 
             except Exception as e:
-                mark_failed(task_id, str(e))
+                mark_failed(task_id, str(e), status="queued")
                 logger.error(f"[JOIN] task#{task_id} failed: {e}")
 
-            await asyncio.sleep(0.1)
+            interval = int(load_runtime_settings().get("join_interval_seconds", self.poll_seconds))
+            await asyncio.sleep(max(1, interval))

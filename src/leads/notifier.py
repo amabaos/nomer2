@@ -1,5 +1,8 @@
 from typing import List, Dict, Any
+import asyncio
 import requests
+from loguru import logger
+
 from src.core.config import settings
 
 
@@ -9,41 +12,19 @@ async def send_lead_html(
     text_html: str,
     buttons: List[List[Dict[str, Any]]],
 ):
-    """
-    Отправка лида через Telegram Bot API.
-
-    chat_id    — куда отправляем (SERVICE_CHAT_ID)
-    text_html  — текст сообщения
-    buttons    — список строк кнопок:
-                  [
-                      [{"text": "...", "url": "..."}],
-                      [{"text": "...", "callback_data": "..."}],
-                  ]
-    """
-
     keyboard = None
-
     if buttons:
         inline_keyboard = []
-
         for row in buttons:
             row_buttons = []
-
             for b in row:
                 btn = {"text": b["text"]}
-
-                # Если это URL-кнопка
                 if "url" in b:
                     btn["url"] = b["url"]
-
-                # Если это callback-кнопка
                 if "callback_data" in b:
                     btn["callback_data"] = b["callback_data"]
-
                 row_buttons.append(btn)
-
             inline_keyboard.append(row_buttons)
-
         keyboard = {"inline_keyboard": inline_keyboard}
 
     payload = {
@@ -51,13 +32,24 @@ async def send_lead_html(
         "text": text_html,
         "disable_web_page_preview": True,
     }
-
     if keyboard:
         payload["reply_markup"] = keyboard
 
     url = f"https://api.telegram.org/bot{settings.bot_token}/sendMessage"
 
-    resp = requests.post(url, json=payload, timeout=15)
+    attempts = 3
+    last_err = None
+    for i in range(attempts):
+        try:
+            resp = await asyncio.to_thread(requests.post, url, json=payload, timeout=15)
+            if resp.ok:
+                return True
+            last_err = f"status={resp.status_code}"
+            logger.warning(f"[NOTIFY] sendMessage failed ({i + 1}/{attempts}): {resp.status_code}")
+        except Exception as e:
+            last_err = str(e)
+            logger.warning(f"[NOTIFY] sendMessage exception ({i + 1}/{attempts}): {e}")
+        await asyncio.sleep(1 + i)
 
-    if not resp.ok:
-        print("Ошибка отправки лида через бота:", resp.status_code, resp.text)
+    logger.error(f"[NOTIFY] lead not sent after retries: {last_err}")
+    return False

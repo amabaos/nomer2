@@ -1,19 +1,29 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Literal
+
+
+AccountStatus = Literal[
+    "active",
+    "paused",
+    "disabled",
+    "error",
+    "authorization_required",
+    "inactive",
+]
 
 
 class Account(BaseModel):
     id: int
-    stage: str = Field(default="Stage 1")              # метка (пока оставляем)
+    stage: str = Field(default="Stage 1")
+    title: Optional[str] = None
     phone: str
     username: Optional[str] = None
     name: Optional[str] = None
     proxy: Optional[str] = None
     session_path: str
-    status: str = "inactive"
+    status: AccountStatus = "inactive"
+    status_reason: Optional[str] = None
 
     dedupe_enabled: bool = True
     dedupe_window_hours: int = 24
-
-    # NEW: лимит чатов на аккаунт (твой MVP-дефолт)
     max_chats: int = 250

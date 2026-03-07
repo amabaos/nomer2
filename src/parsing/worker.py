@@ -13,6 +13,7 @@ from src.core.config import settings
 
 from src.db.database import SessionLocal
 from src.db.models import ProcessedMessage, UserChatHit, Blacklist, LeadEvent
+from src.runtime_settings import load_runtime_settings
 
 # НОВОЕ: группы из runtime
 from src.groups.runtime import build_chat_to_groups_map, build_group_keywords_map
@@ -159,7 +160,8 @@ class ParserWorker:
                 return False
 
             # 3) TTL (можно отключить через ENV)
-            ttl_hours = int(getattr(settings, "lead_ttl_hours", 24))
+            runtime_cfg = load_runtime_settings()
+            ttl_hours = int(runtime_cfg.get("lead_ttl_hours", getattr(settings, "lead_ttl_hours", 24)))
             hit = db.query(UserChatHit).filter_by(
                 chat_id=chat_id,
                 user_id=user_id
@@ -183,7 +185,7 @@ class ParserWorker:
                 message_id=msg.id,
                 matched_groups=matched_groups,
                 matched_keyword=matched_keyword,
-                parser_account=f"#{self.account.id} ({self.account.phone})",
+                parser_account=f"#{self.account.id} {self.account.title or self.account.stage} ({self.account.phone})",
             )
 
             # 5) Приводим кнопки к формату "строки"
@@ -217,6 +219,7 @@ class ParserWorker:
                 author_username=getattr(user, "username", None),
                 group_name=primary_group,
                 keyword=matched_keyword,
+                message_id=msg.id,
                 message_text=text or "",
                 parser_account_id=self.account.id,
             ))

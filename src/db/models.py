@@ -49,6 +49,7 @@ class LeadEvent(Base):
     author_username = Column(String(200), nullable=True)
     group_name = Column(String(200), index=True, nullable=True)
     keyword = Column(String(255), index=True, nullable=True)
+    message_id = Column(BigInteger, index=True, nullable=True)
     message_text = Column(String, nullable=False, default="")
     parser_account_id = Column(Integer, index=True, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)

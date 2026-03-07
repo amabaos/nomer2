@@ -15,6 +15,7 @@ AccountStatus = Literal[
 class Account(BaseModel):
     id: int
     stage: str = Field(default="Stage 1")
+    title: Optional[str] = None
     phone: str
     username: Optional[str] = None
     name: Optional[str] = None

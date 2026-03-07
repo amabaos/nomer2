@@ -1,7 +1,13 @@
 import time
 from collections import OrderedDict
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import html
+import os
+import re
+import tempfile
+import uuid
 
 import requests
 from loguru import logger
@@ -11,12 +17,14 @@ from sqlalchemy.exc import IntegrityError
 from src.accounts.models import Account
 from src.accounts.repo import delete_account, get_next_id, list_accounts, upsert_account
 from src.assignments.repo import load_assignments, save_assignments
+from src.assignments.repo import auto_assign_chat_ids_round_robin
 from src.core.config import settings
 from src.db.database import SessionLocal
 from src.db.models import Blacklist, LeadEvent
 from src.gateways.telegram_client import make_client
 from src.groups.repo import (
     add_keyword,
+    create_group,
     get_group,
     load_groups,
     remove_chat_everywhere,
@@ -24,6 +32,9 @@ from src.groups.repo import (
     set_chat_active,
     set_keyword_active,
 )
+from src.join.models import JoinTask
+from src.join.repo import add_tasks
+from src.runtime_settings import load_runtime_settings, save_runtime_settings
 from src.stats_service import collect_system_stats
 
 API = f"https://api.telegram.org/bot{settings.bot_token}"
@@ -39,7 +50,7 @@ def _post(method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "description": str(e)}
 
 
-def _send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None):
+def _send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None, parse_mode: Optional[str] = None):
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
@@ -47,6 +58,8 @@ def _send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None):
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     _post("sendMessage", payload)
 
 
@@ -64,7 +77,13 @@ def _edit_keyboard(chat_id: int, message_id: int, new_reply_markup: dict):
     )
 
 
-def _edit_text(chat_id: int, message_id: int, text: str, reply_markup: Optional[dict] = None):
+def _edit_text(
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: Optional[dict] = None,
+    parse_mode: Optional[str] = None,
+):
     payload = {
         "chat_id": chat_id,
         "message_id": message_id,
@@ -73,7 +92,51 @@ def _edit_text(chat_id: int, message_id: int, text: str, reply_markup: Optional[
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     _post("editMessageText", payload)
+
+
+def _send_document(chat_id: int, file_path: str, caption: str = ""):
+    try:
+        with open(file_path, "rb") as f:
+            files = {"document": f}
+            data = {"chat_id": chat_id, "caption": caption}
+            requests.post(f"{API}/sendDocument", data=data, files=files, timeout=30)
+    except Exception as e:
+        logger.error(f"sendDocument error: {e}")
+
+
+def _normalize_chat_handle(raw: str) -> Optional[str]:
+    s = (raw or "").strip().strip('"').strip("'")
+    if not s:
+        return None
+    if s.startswith("http://t.me/"):
+        s = "https://" + s[len("http://"):]
+    if s.startswith("https://t.me/"):
+        return s
+    if s.startswith("t.me/"):
+        return "https://" + s
+    if s.startswith("@"):
+        return s
+    if re.fullmatch(r"[A-Za-z0-9_]+", s):
+        return f"@{s}"
+    return None
+
+
+def _parse_chat_lines(text: str) -> List[str]:
+    uniq: List[str] = []
+    seen = set()
+    for line in (text or "").splitlines():
+        h = _normalize_chat_handle(line)
+        if not h:
+            continue
+        k = h.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(h)
+    return uniq
 
 
 def _set_blacklist(user_id: int, enable: bool) -> bool:
@@ -122,7 +185,6 @@ def _main_menu_keyboard() -> dict:
             [{"text": "👤 Аккаунты"}, {"text": "💬 Чаты"}],
             [{"text": "🔑 Ключевые слова"}, {"text": "📥 Результаты"}],
             [{"text": "📊 Статистика"}, {"text": "⚙️ Настройки"}],
-            [{"text": "🛠 Админка"}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,
@@ -163,7 +225,7 @@ def _home_text() -> str:
     s = collect_system_stats()
     parser_on = "✅ Включён" if s.get("accounts_active", 0) > 0 else "⏸ На паузе"
     return (
-        "🏠 Parser 2.0 — панель управления\n\n"
+        "🏠 HR Prime версия 1.0 — панель управления\n\n"
         f"👤 Аккаунтов: {s['accounts_total']} (активных: {s['accounts_active']})\n"
         f"💬 Чатов в работе: {s['chats_active']} из {s['chats_total']}\n"
         f"🔑 Ключей активно: {s['keywords_active']} из {s['keywords_total']}\n"
@@ -183,7 +245,8 @@ def _render_accounts_text() -> str:
 
     lines = ["👤 Аккаунты", ""]
     for a in accs:
-        lines.append(f"• #{a.id} {a.phone} — {_fmt_status(a.status)}")
+        title = (a.title or a.stage or f"Аккаунт {a.id}")[:32]
+        lines.append(f"• {title} (ID: {a.id}) {a.phone} — {_fmt_status(a.status)}")
     return "\n".join(lines)
 
 
@@ -199,7 +262,7 @@ def _accounts_keyboard() -> dict:
                 {"text": "🗑", "callback_data": f"acc:del:{a.id}"},
             ]
         )
-    rows.append([{"text": "➕ Добавить по сессии", "callback_data": "acc:add:session"}])
+    rows.append([{"text": "➕ Добавить аккаунт", "callback_data": "acc:add:start"}])
     rows.append(
         [
             {"text": "🔄 Обновить", "callback_data": "acc:list"},
@@ -215,12 +278,13 @@ def _render_account_card(account_id: int) -> str:
         return "Аккаунт не найден"
 
     assignments = load_assignments().get(str(acc.id), [])
+    title = (acc.title or acc.stage or f"Аккаунт {acc.id}")[:32]
     return (
-        f"👤 Аккаунт #{acc.id}\n"
+        f"👤 {title} (ID: {acc.id})\n"
         f"📱 Номер: {acc.phone}\n"
+        f"🙍 Username: @{acc.username if acc.username else '-'}\n"
         f"🧾 Статус: {_fmt_status(acc.status)}\n"
         f"💬 Назначено чатов: {len(assignments)}\n"
-        f"📁 Сессия: {acc.session_path}\n"
         f"🌐 Прокси: {'есть' if acc.proxy else 'нет'}"
     )
 
@@ -234,6 +298,10 @@ def _account_card_keyboard(account_id: int) -> dict:
     action_text = "⏸ Пауза" if acc.status == "active" else "▶️ Запустить"
     return {
         "inline_keyboard": [
+            [{"text": "✏️ Название", "callback_data": f"acc:rename:{acc.id}"}],
+            [{"text": "➕ Добавить чат", "callback_data": f"acc:addchats:{acc.id}"}],
+            [{"text": "📤 Выгрузить список чатов", "callback_data": f"acc:export:{acc.id}"}],
+            [{"text": "🌐 Изменить прокси", "callback_data": f"acc:proxy:{acc.id}"}],
             [{"text": action_text, "callback_data": f"acc:toggle:{acc.id}:{action}"}],
             [{"text": "🗑 Удалить аккаунт", "callback_data": f"acc:del:{acc.id}"}],
             [
@@ -304,6 +372,9 @@ def _build_chats_keyboard() -> dict:
             ]
         )
 
+    rows.append(
+        [{"text": "➕ Добавить чаты", "callback_data": "chat:addbulk"}]
+    )
     rows.append(
         [
             {"text": "🔄 Обновить", "callback_data": "chat:list"},
@@ -395,6 +466,7 @@ def _keywords_groups_keyboard() -> dict:
         [{"text": f"📂 {name}", "callback_data": f"kw:g:{name}"}]
         for name in _groups_brief_index().keys()
     ]
+    rows.append([{"text": "➕ Новая группа", "callback_data": "kw:newgroup"}])
     rows.append(
         [
             {"text": "🔄 Обновить", "callback_data": "kw:list"},
@@ -447,6 +519,19 @@ def _group_keywords_keyboard(group_name: str) -> dict:
     return {"inline_keyboard": rows}
 
 
+def _build_chat_link(chat_title: str, chat_username: Optional[str]) -> str:
+    safe_title = html.escape(chat_title or "Чат")
+    if chat_username:
+        return f'<a href="https://t.me/{chat_username}">{safe_title}</a>'
+    return safe_title
+
+
+def _build_message_link(chat_username: Optional[str], message_id: Optional[int]) -> str:
+    if chat_username and message_id:
+        return f'<a href="https://t.me/{chat_username}/{int(message_id)}">Открыть сообщение</a>'
+    return "—"
+
+
 def _recent_results_text(limit: int = 10) -> str:
     db = SessionLocal()
     try:
@@ -465,13 +550,51 @@ def _recent_results_text(limit: int = 10) -> str:
             if x.author_username
             else (str(x.author_id) if x.author_id else "неизвестно")
         )
-        lines.append(f"• {when} | {x.chat_title or x.chat_id} | {x.keyword or '-'} | {author}")
+        lines.append(f"• {when}")
+        lines.append(f"Чат: {_build_chat_link(x.chat_title or str(x.chat_id), x.chat_username)}")
+        lines.append(f"Ключ: {html.escape(x.keyword or '-')} | Автор: {html.escape(author)}")
+        lines.append(f"Текст сообщения: {_build_message_link(x.chat_username, getattr(x, 'message_id', None))}")
+        lines.append("")
     return "\n".join(lines)
+
+
+def _render_today_results_file() -> str:
+    start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(LeadEvent)
+            .filter(LeadEvent.created_at >= start, LeadEvent.created_at < end)
+            .order_by(LeadEvent.id.asc())
+            .all()
+        )
+    finally:
+        db.close()
+
+    fd, path = tempfile.mkstemp(prefix="results_today_", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        for x in rows:
+            when = x.created_at.isoformat(sep=" ", timespec="minutes") if x.created_at else "-"
+            chat_link = f"https://t.me/{x.chat_username}" if x.chat_username else "-"
+            msg_link = (
+                f"https://t.me/{x.chat_username}/{int(x.message_id)}"
+                if x.chat_username and getattr(x, "message_id", None)
+                else "-"
+            )
+            f.write(f"{when} | {x.chat_title or x.chat_id} | chat={chat_link} | msg={msg_link}\n")
+    return path
+
+
+def send_daily_results_report() -> None:
+    report = _render_today_results_file()
+    _send_document(settings.owner_id, report, "📥 Авто-выгрузка результатов за сегодня")
 
 
 def _results_keyboard() -> dict:
     return {
         "inline_keyboard": [
+            [{"text": "📤 Выгрузить за сегодня", "callback_data": "res:export:today"}],
             [
                 {"text": "🔄 Обновить", "callback_data": "res:list"},
                 {"text": "🏠 На главную", "callback_data": "home"},
@@ -499,6 +622,26 @@ def _stats_keyboard() -> dict:
                 {"text": "🔄 Обновить", "callback_data": "stats:all"},
                 {"text": "🏠 На главную", "callback_data": "home"},
             ]
+        ]
+    }
+
+
+def _settings_text() -> str:
+    cfg = load_runtime_settings()
+    return (
+        "⚙️ Настройки\n\n"
+        "Парсинг работает 24/7.\n"
+        f"• Lead TTL (часы): {cfg['lead_ttl_hours']}\n"
+        f"• Интервал вступления в чаты (сек): {cfg['join_interval_seconds']}"
+    )
+
+
+def _settings_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text": "🕒 Изменить Lead TTL (часы)", "callback_data": "settings:leadttl"}],
+            [{"text": "⏱ Изменить интервал Join (сек)", "callback_data": "settings:joininterval"}],
+            [{"text": "🏠 На главную", "callback_data": "home"}],
         ]
     }
 
@@ -549,25 +692,38 @@ def _handle_state_input(msg: dict) -> bool:
 
     action = state.get("action")
     try:
-        if action == "acc_add_session":
-            parts = [x.strip() for x in text.split("|")]
-            if len(parts) < 2:
-                _send_message(chat_id, "Формат: +380... | путь_к_session | proxy(необязательно)")
+        if action == "acc_add_phone":
+            _set_state(owner_id, "acc_add_session_path", phone=text)
+            _send_message(chat_id, "Шаг 2/4. Отправь путь к session-файлу.")
+            return True
+
+        if action == "acc_add_session_path":
+            if not Path(text).exists():
+                _send_message(chat_id, "Файл сессии не найден. Отправь корректный путь.")
                 return True
+            payload = dict(state)
+            payload["session_path"] = text
+            _set_state(owner_id, "acc_add_password", **payload)
+            _send_message(chat_id, "Шаг 3/4. Если есть пароль 2FA — отправь его. Если нет, отправь '-'.")
+            return True
 
-            phone = parts[0]
-            session_path = parts[1]
-            proxy = parts[2] if len(parts) > 2 else None
+        if action == "acc_add_password":
+            payload = dict(state)
+            payload["password"] = None if text == "-" else text
+            _set_state(owner_id, "acc_add_proxy", **payload)
+            _send_message(chat_id, "Шаг 4/4. Отправь прокси (socks5://...), либо нажми 'Пропустить прокси'.")
+            return True
 
-            if not Path(session_path).exists():
-                _send_message(chat_id, "Файл сессии не найден. Проверь путь.")
-                return True
-
+        if action == "acc_add_proxy":
+            proxy = None if text.lower() in {"пропустить", "-"} else text
+            phone = state.get("phone")
+            session_path = state.get("session_path")
             new_id = get_next_id(list_accounts())
             acc = Account(
                 id=new_id,
                 phone=phone,
                 stage=f"Account {new_id}",
+                title=f"Account {new_id}",
                 session_path=session_path,
                 proxy=proxy,
                 status="inactive",
@@ -583,16 +739,60 @@ def _handle_state_input(msg: dict) -> bool:
             me = asyncio.run(_check())
             acc.status = "active"
             acc.username = getattr(me, "username", None)
-            acc.name = (
-                f"{getattr(me, 'first_name', '')} {getattr(me, 'last_name', '')}".strip() or None
-            )
+            acc.name = (f"{getattr(me, 'first_name', '')} {getattr(me, 'last_name', '')}".strip() or None)
             upsert_account(acc)
             _clear_state(owner_id)
-            _send_message(
-                chat_id,
-                f"✅ Аккаунт #{acc.id} подключён по сессии.",
-                reply_markup=_main_menu_keyboard(),
-            )
+            _send_message(chat_id, f"✅ Аккаунт #{acc.id} подключён.", reply_markup=_main_menu_keyboard())
+            return True
+
+        if action == "acc_rename":
+            aid = int(state.get("account_id"))
+            acc = next((a for a in list_accounts() if a.id == aid), None)
+            if not acc:
+                _send_message(chat_id, "Аккаунт не найден")
+                _clear_state(owner_id)
+                return True
+            acc.title = text[:32]
+            upsert_account(acc)
+            _clear_state(owner_id)
+            _send_message(chat_id, "✅ Название обновлено.")
+            return True
+
+        if action == "acc_set_proxy":
+            aid = int(state.get("account_id"))
+            acc = next((a for a in list_accounts() if a.id == aid), None)
+            if not acc:
+                _send_message(chat_id, "Аккаунт не найден")
+            else:
+                acc.proxy = None if text.lower() in {"удалить", "-", "пропустить"} else text
+                upsert_account(acc)
+                _send_message(chat_id, "✅ Прокси обновлен.")
+            _clear_state(owner_id)
+            return True
+
+        if action in {"chat_add_bulk", "acc_add_chats"}:
+            handles = _parse_chat_lines(text)
+            if not handles:
+                _send_message(chat_id, "Не нашел валидных чатов. Отправь список по строкам.")
+                return True
+
+            accs = [a for a in list_accounts() if a.status in {"active", "inactive", "paused"}]
+            if action == "acc_add_chats":
+                aid = int(state.get("account_id"))
+                accs = [a for a in accs if a.id == aid]
+            if not accs:
+                _send_message(chat_id, "Нет доступных аккаунтов для назначения.")
+                return True
+
+            dist = auto_assign_chat_ids_round_robin([a.id for a in accs], list(range(1, len(handles) + 1)))
+            tasks: List[JoinTask] = []
+            for acc in accs:
+                for idx in dist.get(acc.id, []):
+                    handle = handles[idx - 1]
+                    tasks.append(JoinTask(id=str(uuid.uuid4()), group="General", handle=handle, assigned_account_id=acc.id))
+            added = add_tasks(tasks)
+            _clear_state(owner_id)
+            _send_message(chat_id, f"✅ Принято чатов: {len(handles)}. В очередь добавлено: {added}.")
             return True
 
         if action == "kw_add":
@@ -604,6 +804,24 @@ def _handle_state_input(msg: dict) -> bool:
                 f"✅ Ключ добавлен в группу {group}.",
                 reply_markup=_main_menu_keyboard(),
             )
+            return True
+
+        if action == "kw_new_group":
+            create_group(text)
+            _clear_state(owner_id)
+            _send_message(chat_id, f"✅ Группа '{text}' создана.")
+            return True
+
+        if action == "set_lead_ttl":
+            cfg = save_runtime_settings({"lead_ttl_hours": int(text)})
+            _clear_state(owner_id)
+            _send_message(chat_id, f"✅ Lead TTL обновлен: {cfg['lead_ttl_hours']} ч.")
+            return True
+
+        if action == "set_join_interval":
+            cfg = save_runtime_settings({"join_interval_seconds": int(text)})
+            _clear_state(owner_id)
+            _send_message(chat_id, f"✅ Интервал Join обновлен: {cfg['join_interval_seconds']} сек.")
             return True
 
     except Exception as e:
@@ -621,7 +839,7 @@ def _handle_owner_command(msg: dict) -> bool:
 
     text = (msg.get("text") or "").strip()
     chat_id = msg["chat"]["id"]
-    from_user = msg.get("from", {})
+    _ = msg.get("from", {})
 
     if text in {"/start", "/menu", "/help", "🏠 Главная"}:
         _send_home(chat_id)
@@ -644,7 +862,7 @@ def _handle_owner_command(msg: dict) -> bool:
         return True
 
     if text == "📥 Результаты":
-        _send_message(chat_id, _recent_results_text(), reply_markup=_results_keyboard())
+        _send_message(chat_id, _recent_results_text(), reply_markup=_results_keyboard(), parse_mode="HTML")
         return True
 
     if text in {"📊 Статистика", "/stats"}:
@@ -652,26 +870,7 @@ def _handle_owner_command(msg: dict) -> bool:
         return True
 
     if text == "⚙️ Настройки":
-        _send_message(
-            chat_id,
-            "⚙️ Настройки\n\nУправление парсингом:\n• ▶️ Запустить парсинг\n• ⏸ Пауза",
-            reply_markup={
-                "inline_keyboard": [
-                    [{"text": "▶️ Запустить парсинг", "callback_data": "parser:start"}],
-                    [{"text": "⏸ Пауза", "callback_data": "parser:pause"}],
-                    [{"text": "🏠 На главную", "callback_data": "home"}],
-                ]
-            },
-        )
-        return True
-
-    if text == "🛠 Админка":
-        username = from_user.get("username")
-        if username:
-            body = f"🛠 Админка\nID: {from_user.get('id')}\nUsername: @{username}"
-        else:
-            body = f"🛠 Админка\nID: {from_user.get('id')}"
-        _send_message(chat_id, body, reply_markup=_main_menu_keyboard())
+        _send_message(chat_id, _settings_text(), reply_markup=_settings_keyboard())
         return True
 
     return False
@@ -730,16 +929,61 @@ def _handle_acc_callback(callback_id: str, chat_id: int, message_id: int, data_s
         _answer_callback(callback_id, "Удалено ✅" if ok else "Не найдено")
         return
 
-    if action == "add" and len(parts) >= 3 and parts[2] == "session":
-        _set_state(settings.owner_id, "acc_add_session")
+    if action == "add" and len(parts) >= 3 and parts[2] == "start":
+        _set_state(settings.owner_id, "acc_add_phone")
         _send_message(
             chat_id,
-            "Отправь данные в формате:\n"
-            "+380... | data/users/1/accounts/3/session.session | socks5://...\n\n"
-            "Прокси можно не указывать. Для отмены отправь: Отмена",
+            "Шаг 1/4. Отправь номер телефона аккаунта в формате +380...\nДля отмены: Отмена",
+            reply_markup={"keyboard": [[{"text": "Пропустить прокси"}], [{"text": "Отмена"}]], "resize_keyboard": True},
+        )
+        _answer_callback(callback_id, "Жду номер")
+        return
+
+    if action == "rename" and len(parts) >= 3:
+        aid = int(parts[2])
+        _set_state(settings.owner_id, "acc_rename", account_id=aid)
+        _send_message(chat_id, "Введи новое название аккаунта (до 32 символов).")
+        _answer_callback(callback_id, "Жду название")
+        return
+
+    if action == "proxy" and len(parts) >= 3:
+        aid = int(parts[2])
+        _set_state(settings.owner_id, "acc_set_proxy", account_id=aid)
+        _send_message(chat_id, "Отправь новый прокси или 'удалить' чтобы убрать.")
+        _answer_callback(callback_id, "Жду прокси")
+        return
+
+    if action == "addchats" and len(parts) >= 3:
+        aid = int(parts[2])
+        _set_state(settings.owner_id, "acc_add_chats", account_id=aid)
+        _send_message(chat_id, "Отправь список чатов по строкам для этого аккаунта.")
+        _answer_callback(callback_id, "Жду список")
+        return
+
+    if action == "export" and len(parts) >= 3:
+        aid = int(parts[2])
+        assignments = load_assignments().get(str(aid), [])
+        index = _get_chats_index()
+        fd, p = tempfile.mkstemp(prefix=f"account_{aid}_chats_", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for cid in assignments:
+                info = index.get(int(cid), {})
+                title = info.get("title") or str(cid)
+                username = info.get("username")
+                link = f"https://t.me/{username}" if username else str(cid)
+                f.write(f"{title} | {link}\n")
+        _send_document(chat_id, p, f"Чаты аккаунта #{aid}")
+        _answer_callback(callback_id, "Выгружено ✅")
+        return
+
+    if action == "add" and len(parts) >= 3 and parts[2] == "session":
+        _set_state(settings.owner_id, "acc_add_phone")
+        _send_message(
+            chat_id,
+            "Шаг 1/4. Отправь номер телефона аккаунта в формате +380...",
             reply_markup=_main_menu_keyboard(),
         )
-        _answer_callback(callback_id, "Жду данные")
+        _answer_callback(callback_id, "Жду номер")
         return
 
     _answer_callback(callback_id, "Неизвестная кнопка")
@@ -752,6 +996,12 @@ def _handle_chat_callback(callback_id: str, chat_id: int, message_id: int, data_
     if action == "list":
         _edit_text(chat_id, message_id, _render_chat_list_text(), reply_markup=_build_chats_keyboard())
         _answer_callback(callback_id)
+        return
+
+    if action == "addbulk":
+        _set_state(settings.owner_id, "chat_add_bulk")
+        _send_message(chat_id, "Отправь список чатов для массового вступления (по строкам).")
+        _answer_callback(callback_id, "Жду список")
         return
 
     if action == "open" and len(parts) >= 3:
@@ -807,6 +1057,12 @@ def _handle_chat_callback(callback_id: str, chat_id: int, message_id: int, data_
 
 
 def _handle_keywords_callback(callback_id: str, chat_id: int, message_id: int, data_str: str):
+    if data_str == "kw:newgroup":
+        _set_state(settings.owner_id, "kw_new_group")
+        _send_message(chat_id, "Введи название новой группы ключевых слов.")
+        _answer_callback(callback_id, "Жду название")
+        return
+
     if data_str == "kw:list":
         _edit_text(chat_id, message_id, _keywords_groups_text(), reply_markup=_keywords_groups_keyboard())
         _answer_callback(callback_id)
@@ -869,11 +1125,17 @@ def _handle_keywords_callback(callback_id: str, chat_id: int, message_id: int, d
 
 
 def _handle_results_callback(callback_id: str, chat_id: int, message_id: int, data_str: str):
+    if data_str == "res:export:today":
+        report = _render_today_results_file()
+        _send_document(chat_id, report, "Результаты за сегодня")
+        _answer_callback(callback_id, "Готово ✅")
+        return
+
     if data_str != "res:list":
         _answer_callback(callback_id, "Неизвестная кнопка")
         return
 
-    _edit_text(chat_id, message_id, _recent_results_text(), reply_markup=_results_keyboard())
+    _edit_text(chat_id, message_id, _recent_results_text(), reply_markup=_results_keyboard(), parse_mode="HTML")
     _answer_callback(callback_id)
 
 
@@ -902,6 +1164,22 @@ def _handle_parser_callback(callback_id: str, chat_id: int, message_id: int, dat
         reply_markup={"inline_keyboard": [[{"text": "🏠 На главную", "callback_data": "home"}]]},
     )
     _answer_callback(callback_id)
+
+
+def _handle_settings_callback(callback_id: str, chat_id: int, message_id: int, data_str: str):
+    if data_str == "settings:leadttl":
+        _set_state(settings.owner_id, "set_lead_ttl")
+        _send_message(chat_id, "Введи Lead TTL в часах (0 = отключить TTL).")
+        _answer_callback(callback_id, "Жду число")
+        return
+
+    if data_str == "settings:joininterval":
+        _set_state(settings.owner_id, "set_join_interval")
+        _send_message(chat_id, "Введи интервал вступления в чаты в секундах.")
+        _answer_callback(callback_id, "Жду число")
+        return
+
+    _answer_callback(callback_id, "Неизвестная кнопка")
 
 
 def run_bot_updates_loop():
@@ -1009,6 +1287,10 @@ def run_bot_updates_loop():
 
                 if data_str.startswith("parser:"):
                     _handle_parser_callback(callback_id, chat_id, message_id, data_str)
+                    continue
+
+                if data_str.startswith("settings:"):
+                    _handle_settings_callback(callback_id, chat_id, message_id, data_str)
                     continue
 
                 _answer_callback(callback_id, "Неизвестная кнопка")

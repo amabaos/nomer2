@@ -91,11 +91,28 @@ def add_tasks(tasks: List[JoinTask]) -> int:
 
 def pick_next_task(account_id: int) -> Optional[Dict]:
     tasks = load_tasks()
+    account_id = int(account_id)
+
+    for t in tasks:
+        if t.get("status") != "queued":
+            continue
+        assigned = t.get("assigned_account_id")
+        if assigned is None:
+            continue
+        if int(assigned) != account_id:
+            continue
+
+        t["status"] = "in_progress"
+        t["updated_at"] = datetime.utcnow().isoformat()
+        t["tries"] = int(t.get("tries") or 0) + 1
+        save_tasks(tasks)
+        return t
+
     for t in tasks:
         if t.get("status") == "queued":
             t["status"] = "in_progress"
             t["updated_at"] = datetime.utcnow().isoformat()
-            t["assigned_account_id"] = int(account_id)
+            t["assigned_account_id"] = account_id
             t["tries"] = int(t.get("tries") or 0) + 1
             save_tasks(tasks)
             return t

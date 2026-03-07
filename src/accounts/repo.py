@@ -62,3 +62,13 @@ def upsert_account(acc: Account) -> None:
     if not updated:
         accs.append(acc)
     save_accounts(accs)
+
+
+
+def delete_account(account_id: int) -> bool:
+    accs = list_accounts()
+    kept = [a for a in accs if a.id != int(account_id)]
+    if len(kept) == len(accs):
+        return False
+    save_accounts(kept)
+    return True

@@ -86,6 +86,7 @@ def _set_blacklist(user_id: int, enable: bool) -> bool:
             except IntegrityError:
                 db.rollback()
             return True
+
         db.query(Blacklist).filter(Blacklist.user_id == user_id).delete()
         db.commit()
         return False
@@ -105,7 +106,11 @@ def _build_toggled_keyboard(existing_keyboard: list, is_blacklisted: bool, user_
         if not has_bl_button:
             kept_rows.append(row)
 
-    toggle_row = [{"text": "✅ Разблокировать", "callback_data": f"bl:off:{user_id}"}] if is_blacklisted else [{"text": "🚫 В ЧС", "callback_data": f"bl:on:{user_id}"}]
+    toggle_row = (
+        [{"text": "✅ Разблокировать", "callback_data": f"bl:off:{user_id}"}]
+        if is_blacklisted
+        else [{"text": "🚫 В ЧС", "callback_data": f"bl:on:{user_id}"}]
+    )
     kept_rows.append(toggle_row)
     return {"inline_keyboard": kept_rows}
 
@@ -121,6 +126,24 @@ def _main_menu_keyboard() -> dict:
         ],
         "resize_keyboard": True,
         "is_persistent": True,
+    }
+
+
+def _home_inline_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "👤 Аккаунты", "callback_data": "acc:list"},
+                {"text": "💬 Чаты", "callback_data": "chat:list"},
+            ],
+            [
+                {"text": "🔑 Ключевые слова", "callback_data": "kw:list"},
+                {"text": "📥 Результаты", "callback_data": "res:list"},
+            ],
+            [
+                {"text": "📊 Статистика", "callback_data": "stats:all"},
+            ],
+        ]
     }
 
 
@@ -177,7 +200,12 @@ def _accounts_keyboard() -> dict:
             ]
         )
     rows.append([{"text": "➕ Добавить по сессии", "callback_data": "acc:add:session"}])
-    rows.append([{"text": "🔄 Обновить", "callback_data": "acc:list"}, {"text": "🏠 На главную", "callback_data": "home"}])
+    rows.append(
+        [
+            {"text": "🔄 Обновить", "callback_data": "acc:list"},
+            {"text": "🏠 На главную", "callback_data": "home"},
+        ]
+    )
     return {"inline_keyboard": rows}
 
 
@@ -208,7 +236,10 @@ def _account_card_keyboard(account_id: int) -> dict:
         "inline_keyboard": [
             [{"text": action_text, "callback_data": f"acc:toggle:{acc.id}:{action}"}],
             [{"text": "🗑 Удалить аккаунт", "callback_data": f"acc:del:{acc.id}"}],
-            [{"text": "⬅️ К списку", "callback_data": "acc:list"}, {"text": "🏠 На главную", "callback_data": "home"}],
+            [
+                {"text": "⬅️ К списку", "callback_data": "acc:list"},
+                {"text": "🏠 На главную", "callback_data": "home"},
+            ],
         ]
     }
 
@@ -261,15 +292,24 @@ def _build_chats_keyboard() -> dict:
         label = f"{title} ({chat_id})"
         if len(label) > 50:
             label = label[:47] + "..."
+
         active = bool(info.get("active", True))
         rows.append(
             [
                 {"text": label, "callback_data": f"chat:open:{chat_id}"},
-                {"text": "❌" if active else "➕", "callback_data": f"chat:toggle:{chat_id}:{'off' if active else 'on'}:list"},
+                {
+                    "text": "❌" if active else "➕",
+                    "callback_data": f"chat:toggle:{chat_id}:{'off' if active else 'on'}:list",
+                },
             ]
         )
 
-    rows.append([{"text": "🔄 Обновить", "callback_data": "chat:list"}, {"text": "🏠 На главную", "callback_data": "home"}])
+    rows.append(
+        [
+            {"text": "🔄 Обновить", "callback_data": "chat:list"},
+            {"text": "🏠 На главную", "callback_data": "home"},
+        ]
+    )
     return {"inline_keyboard": rows}
 
 
@@ -309,9 +349,17 @@ def _build_chat_details_keyboard(chat_id: int) -> dict:
 
     return {
         "inline_keyboard": [
-            [{"text": "❌ Отключить" if active else "➕ Включить", "callback_data": f"chat:toggle:{chat_id}:{'off' if active else 'on'}:details"}],
+            [
+                {
+                    "text": "❌ Отключить" if active else "➕ Включить",
+                    "callback_data": f"chat:toggle:{chat_id}:{'off' if active else 'on'}:details",
+                }
+            ],
             [{"text": "🗑 Удалить из бота", "callback_data": f"chat:remove:{chat_id}"}],
-            [{"text": "⬅️ К списку", "callback_data": "chat:list"}, {"text": "🏠 На главную", "callback_data": "home"}],
+            [
+                {"text": "⬅️ К списку", "callback_data": "chat:list"},
+                {"text": "🏠 На главную", "callback_data": "home"},
+            ],
         ]
     }
 
@@ -322,7 +370,11 @@ def _groups_brief_index() -> Dict[str, Dict[str, Any]]:
         kws = g.get("keywords") or []
         total = len(kws)
         active = sum(1 for kw in kws if kw.get("active", True))
-        out[g.get("name")] = {"enabled": bool(g.get("enabled", True)), "keywords_total": total, "keywords_active": active}
+        out[g.get("name")] = {
+            "enabled": bool(g.get("enabled", True)),
+            "keywords_total": total,
+            "keywords_active": active,
+        }
     return out
 
 
@@ -339,8 +391,16 @@ def _keywords_groups_text() -> str:
 
 
 def _keywords_groups_keyboard() -> dict:
-    rows = [[{"text": f"📂 {name}", "callback_data": f"kw:g:{name}"}] for name in _groups_brief_index().keys()]
-    rows.append([{"text": "🔄 Обновить", "callback_data": "kw:list"}, {"text": "🏠 На главную", "callback_data": "home"}])
+    rows = [
+        [{"text": f"📂 {name}", "callback_data": f"kw:g:{name}"}]
+        for name in _groups_brief_index().keys()
+    ]
+    rows.append(
+        [
+            {"text": "🔄 Обновить", "callback_data": "kw:list"},
+            {"text": "🏠 На главную", "callback_data": "home"},
+        ]
+    )
     return {"inline_keyboard": rows}
 
 
@@ -369,13 +429,21 @@ def _group_keywords_keyboard(group_name: str) -> dict:
             active = bool(item.get("active", True))
             rows.append(
                 [
-                    {"text": f"{text}", "callback_data": f"noop"},
-                    {"text": "⏸" if active else "▶️", "callback_data": f"kw:toggle:{group_name}:{text}:{'off' if active else 'on'}"},
+                    {"text": f"{text}", "callback_data": "noop"},
+                    {
+                        "text": "⏸" if active else "▶️",
+                        "callback_data": f"kw:toggle:{group_name}:{text}:{'off' if active else 'on'}",
+                    },
                     {"text": "🗑", "callback_data": f"kw:del:{group_name}:{text}"},
                 ]
             )
     rows.append([{"text": "➕ Добавить ключ", "callback_data": f"kw:add:{group_name}"}])
-    rows.append([{"text": "⬅️ К группам", "callback_data": "kw:list"}, {"text": "🏠 На главную", "callback_data": "home"}])
+    rows.append(
+        [
+            {"text": "⬅️ К группам", "callback_data": "kw:list"},
+            {"text": "🏠 На главную", "callback_data": "home"},
+        ]
+    )
     return {"inline_keyboard": rows}
 
 
@@ -391,14 +459,25 @@ def _recent_results_text(limit: int = 10) -> str:
 
     lines = ["📥 Последние совпадения", ""]
     for x in rows:
-        when = (x.created_at.isoformat(sep=' ', timespec='minutes') if x.created_at else "-")
-        author = f"@{x.author_username}" if x.author_username else (str(x.author_id) if x.author_id else "неизвестно")
+        when = x.created_at.isoformat(sep=" ", timespec="minutes") if x.created_at else "-"
+        author = (
+            f"@{x.author_username}"
+            if x.author_username
+            else (str(x.author_id) if x.author_id else "неизвестно")
+        )
         lines.append(f"• {when} | {x.chat_title or x.chat_id} | {x.keyword or '-'} | {author}")
     return "\n".join(lines)
 
 
 def _results_keyboard() -> dict:
-    return {"inline_keyboard": [[{"text": "🔄 Обновить", "callback_data": "res:list"}, {"text": "🏠 На главную", "callback_data": "home"}]]}
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔄 Обновить", "callback_data": "res:list"},
+                {"text": "🏠 На главную", "callback_data": "home"},
+            ]
+        ]
+    }
 
 
 def _stats_text() -> str:
@@ -414,7 +493,14 @@ def _stats_text() -> str:
 
 
 def _stats_keyboard() -> dict:
-    return {"inline_keyboard": [[{"text": "🔄 Обновить", "callback_data": "stats:all"}, {"text": "🏠 На главную", "callback_data": "home"}]]}
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔄 Обновить", "callback_data": "stats:all"},
+                {"text": "🏠 На главную", "callback_data": "home"},
+            ]
+        ]
+    }
 
 
 def _set_state(owner_id: int, action: str, **payload):
@@ -441,6 +527,7 @@ def _toggle_parser_all(start: bool) -> str:
                 acc.status_reason = "Пауза через UI"
                 upsert_account(acc)
                 changed += 1
+
     if start:
         return f"▶️ Запуск применён. Аккаунтов переведено в активный режим: {changed}."
     return f"⏸ Пауза применена. Аккаунтов поставлено на паузу: {changed}."
@@ -471,6 +558,7 @@ def _handle_state_input(msg: dict) -> bool:
             phone = parts[0]
             session_path = parts[1]
             proxy = parts[2] if len(parts) > 2 else None
+
             if not Path(session_path).exists():
                 _send_message(chat_id, "Файл сессии не найден. Проверь путь.")
                 return True
@@ -491,20 +579,31 @@ def _handle_state_input(msg: dict) -> bool:
                     return me
 
             import asyncio
+
             me = asyncio.run(_check())
             acc.status = "active"
             acc.username = getattr(me, "username", None)
-            acc.name = f"{getattr(me, 'first_name', '')} {getattr(me, 'last_name', '')}".strip() or None
+            acc.name = (
+                f"{getattr(me, 'first_name', '')} {getattr(me, 'last_name', '')}".strip() or None
+            )
             upsert_account(acc)
             _clear_state(owner_id)
-            _send_message(chat_id, f"✅ Аккаунт #{acc.id} подключён по сессии.", reply_markup=_main_menu_keyboard())
+            _send_message(
+                chat_id,
+                f"✅ Аккаунт #{acc.id} подключён по сессии.",
+                reply_markup=_main_menu_keyboard(),
+            )
             return True
 
         if action == "kw_add":
             group = state.get("group")
             add_keyword(group, text)
             _clear_state(owner_id)
-            _send_message(chat_id, f"✅ Ключ добавлен в группу {group}.", reply_markup=_main_menu_keyboard())
+            _send_message(
+                chat_id,
+                f"✅ Ключ добавлен в группу {group}.",
+                reply_markup=_main_menu_keyboard(),
+            )
             return True
 
     except Exception as e:
@@ -532,11 +631,11 @@ def _handle_owner_command(msg: dict) -> bool:
         _send_message(chat_id, "pong ✅", reply_markup=_main_menu_keyboard())
         return True
 
-    if text in {"👤 Аккаунты"}:
+    if text == "👤 Аккаунты":
         _send_message(chat_id, _render_accounts_text(), reply_markup=_accounts_keyboard())
         return True
 
-    if text in {"💬 Чаты"}:
+    if text == "💬 Чаты":
         _send_message(chat_id, _render_chat_list_text(), reply_markup=_build_chats_keyboard())
         return True
 
@@ -566,9 +665,13 @@ def _handle_owner_command(msg: dict) -> bool:
         )
         return True
 
-    if text in {"🛠 Админка"}:
+    if text == "🛠 Админка":
         username = from_user.get("username")
-        _send_message(chat_id, f"🛠 Админка\nID: {from_user.get('id')}\nUsername: @{username}" if username else f"🛠 Админка\nID: {from_user.get('id')}", reply_markup=_main_menu_keyboard())
+        if username:
+            body = f"🛠 Админка\nID: {from_user.get('id')}\nUsername: @{username}"
+        else:
+            body = f"🛠 Админка\nID: {from_user.get('id')}"
+        _send_message(chat_id, body, reply_markup=_main_menu_keyboard())
         return True
 
     return False
@@ -585,7 +688,12 @@ def _handle_acc_callback(callback_id: str, chat_id: int, message_id: int, data_s
 
     if action == "open" and len(parts) >= 3:
         aid = int(parts[2])
-        _edit_text(chat_id, message_id, _render_account_card(aid), reply_markup=_account_card_keyboard(aid))
+        _edit_text(
+            chat_id,
+            message_id,
+            _render_account_card(aid),
+            reply_markup=_account_card_keyboard(aid),
+        )
         _answer_callback(callback_id)
         return
 
@@ -596,10 +704,17 @@ def _handle_acc_callback(callback_id: str, chat_id: int, message_id: int, data_s
         if not acc:
             _answer_callback(callback_id, "Аккаунт не найден")
             return
+
         acc.status = "paused" if mode == "pause" else "active"
         acc.status_reason = "Пауза через UI" if mode == "pause" else None
         upsert_account(acc)
-        _edit_text(chat_id, message_id, _render_account_card(aid), reply_markup=_account_card_keyboard(aid))
+
+        _edit_text(
+            chat_id,
+            message_id,
+            _render_account_card(aid),
+            reply_markup=_account_card_keyboard(aid),
+        )
         _answer_callback(callback_id, "Готово ✅")
         return
 
@@ -610,6 +725,7 @@ def _handle_acc_callback(callback_id: str, chat_id: int, message_id: int, data_s
             assigns = load_assignments()
             assigns.pop(str(aid), None)
             save_assignments(assigns)
+
         _edit_text(chat_id, message_id, _render_accounts_text(), reply_markup=_accounts_keyboard())
         _answer_callback(callback_id, "Удалено ✅" if ok else "Не найдено")
         return
@@ -618,7 +734,9 @@ def _handle_acc_callback(callback_id: str, chat_id: int, message_id: int, data_s
         _set_state(settings.owner_id, "acc_add_session")
         _send_message(
             chat_id,
-            "Отправь данные в формате:\n+380... | data/users/1/accounts/3/session.session | socks5://...\n\nПрокси можно не указывать. Для отмены отправь: Отмена",
+            "Отправь данные в формате:\n"
+            "+380... | data/users/1/accounts/3/session.session | socks5://...\n\n"
+            "Прокси можно не указывать. Для отмены отправь: Отмена",
             reply_markup=_main_menu_keyboard(),
         )
         _answer_callback(callback_id, "Жду данные")
@@ -638,7 +756,12 @@ def _handle_chat_callback(callback_id: str, chat_id: int, message_id: int, data_
 
     if action == "open" and len(parts) >= 3:
         cid = int(parts[2])
-        _edit_text(chat_id, message_id, _format_chat_details(cid), reply_markup=_build_chat_details_keyboard(cid))
+        _edit_text(
+            chat_id,
+            message_id,
+            _format_chat_details(cid),
+            reply_markup=_build_chat_details_keyboard(cid),
+        )
         _answer_callback(callback_id)
         return
 
@@ -650,9 +773,19 @@ def _handle_chat_callback(callback_id: str, chat_id: int, message_id: int, data_
         set_chat_active(cid, active)
 
         if view == "details":
-            _edit_text(chat_id, message_id, _format_chat_details(cid), reply_markup=_build_chat_details_keyboard(cid))
+            _edit_text(
+                chat_id,
+                message_id,
+                _format_chat_details(cid),
+                reply_markup=_build_chat_details_keyboard(cid),
+            )
         else:
-            _edit_text(chat_id, message_id, _render_chat_list_text(), reply_markup=_build_chats_keyboard())
+            _edit_text(
+                chat_id,
+                message_id,
+                _render_chat_list_text(),
+                reply_markup=_build_chats_keyboard(),
+            )
 
         _answer_callback(callback_id, "Готово ✅")
         return
@@ -660,10 +793,12 @@ def _handle_chat_callback(callback_id: str, chat_id: int, message_id: int, data_
     if action == "remove" and len(parts) >= 3:
         cid = int(parts[2])
         removed = remove_chat_everywhere(cid)
+
         assigns = load_assignments()
         for aid in list(assigns.keys()):
             assigns[aid] = [x for x in assigns.get(aid, []) if int(x) != cid]
         save_assignments(assigns)
+
         _edit_text(chat_id, message_id, _render_chat_list_text(), reply_markup=_build_chats_keyboard())
         _answer_callback(callback_id, f"Удалено: {removed} запис.")
         return
@@ -686,20 +821,34 @@ def _handle_keywords_callback(callback_id: str, chat_id: int, message_id: int, d
     group = parts[2]
 
     if action == "g":
-        _edit_text(chat_id, message_id, _group_keywords_text(group), reply_markup=_group_keywords_keyboard(group))
+        _edit_text(
+            chat_id,
+            message_id,
+            _group_keywords_text(group),
+            reply_markup=_group_keywords_keyboard(group),
+        )
         _answer_callback(callback_id)
         return
 
     if action == "add":
         _set_state(settings.owner_id, "kw_add", group=group)
-        _send_message(chat_id, f"Введи новое ключевое слово для группы {group}.\nДля отмены отправь: Отмена", reply_markup=_main_menu_keyboard())
+        _send_message(
+            chat_id,
+            f"Введи новое ключевое слово для группы {group}.\nДля отмены отправь: Отмена",
+            reply_markup=_main_menu_keyboard(),
+        )
         _answer_callback(callback_id, "Жду слово")
         return
 
     if action == "del" and len(parts) >= 4:
         phrase = parts[3]
         remove_keyword(group, phrase)
-        _edit_text(chat_id, message_id, _group_keywords_text(group), reply_markup=_group_keywords_keyboard(group))
+        _edit_text(
+            chat_id,
+            message_id,
+            _group_keywords_text(group),
+            reply_markup=_group_keywords_keyboard(group),
+        )
         _answer_callback(callback_id, "Удалено ✅")
         return
 
@@ -707,7 +856,12 @@ def _handle_keywords_callback(callback_id: str, chat_id: int, message_id: int, d
         phrase = parts[3]
         mode = parts[4]
         set_keyword_active(group, phrase, mode == "on")
-        _edit_text(chat_id, message_id, _group_keywords_text(group), reply_markup=_group_keywords_keyboard(group))
+        _edit_text(
+            chat_id,
+            message_id,
+            _group_keywords_text(group),
+            reply_markup=_group_keywords_keyboard(group),
+        )
         _answer_callback(callback_id, "Готово ✅")
         return
 
@@ -718,6 +872,7 @@ def _handle_results_callback(callback_id: str, chat_id: int, message_id: int, da
     if data_str != "res:list":
         _answer_callback(callback_id, "Неизвестная кнопка")
         return
+
     _edit_text(chat_id, message_id, _recent_results_text(), reply_markup=_results_keyboard())
     _answer_callback(callback_id)
 
@@ -726,6 +881,7 @@ def _handle_stats_callback(callback_id: str, chat_id: int, message_id: int, data
     if data_str != "stats:all":
         _answer_callback(callback_id, "Неизвестная кнопка")
         return
+
     _edit_text(chat_id, message_id, _stats_text(), reply_markup=_stats_keyboard())
     _answer_callback(callback_id)
 
@@ -739,7 +895,12 @@ def _handle_parser_callback(callback_id: str, chat_id: int, message_id: int, dat
         _answer_callback(callback_id, "Неизвестная кнопка")
         return
 
-    _edit_text(chat_id, message_id, text, reply_markup={"inline_keyboard": [[{"text": "🏠 На главную", "callback_data": "home"}]]})
+    _edit_text(
+        chat_id,
+        message_id,
+        text,
+        reply_markup={"inline_keyboard": [[{"text": "🏠 На главную", "callback_data": "home"}]]},
+    )
     _answer_callback(callback_id)
 
 
@@ -794,7 +955,7 @@ def run_bot_updates_loop():
                     continue
 
                 if data_str == "home":
-                    _edit_text(chat_id, message_id, _home_text(), reply_markup={"inline_keyboard": [[{"text": "👤 Аккаунты", "callback_data": "acc:list"}, {"text": "💬 Чаты", "callback_data": "chat:list"}], [{"text": "🔑 Ключевые слова", "callback_data": "kw:list"}, {"text": "📥 Результаты", "callback_data": "res:list"}], [{"text": "📊 Статистика", "callback_data": "stats:all"}]]})
+                    _edit_text(chat_id, message_id, _home_text(), reply_markup=_home_inline_keyboard())
                     _answer_callback(callback_id)
                     continue
 
@@ -808,11 +969,19 @@ def run_bot_updates_loop():
                     user_id = int(parts[2])
                     if action == "on":
                         is_bl = _set_blacklist(user_id, True)
-                        _edit_keyboard(chat_id, message_id, _build_toggled_keyboard(existing_keyboard, is_bl, user_id))
+                        _edit_keyboard(
+                            chat_id,
+                            message_id,
+                            _build_toggled_keyboard(existing_keyboard, is_bl, user_id),
+                        )
                         _answer_callback(callback_id, "Добавил в ЧС ✅")
                     elif action == "off":
                         is_bl = _set_blacklist(user_id, False)
-                        _edit_keyboard(chat_id, message_id, _build_toggled_keyboard(existing_keyboard, is_bl, user_id))
+                        _edit_keyboard(
+                            chat_id,
+                            message_id,
+                            _build_toggled_keyboard(existing_keyboard, is_bl, user_id),
+                        )
                         _answer_callback(callback_id, "Убрал из ЧС ✅")
                     else:
                         _answer_callback(callback_id, "Неизвестное действие")

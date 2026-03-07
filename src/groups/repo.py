@@ -31,6 +31,7 @@ def _norm_keyword_item(value: Any) -> Optional[Dict[str, Any]]:
             "active": bool(value.get("active", True)),
             "added_at": value.get("added_at") or _now_iso(),
         }
+
     return None
 
 
@@ -56,6 +57,7 @@ def _normalize_group(group: Dict[str, Any]) -> Dict[str, Any]:
     for chat in (g.get("chats") or []):
         if not isinstance(chat, dict) or chat.get("id") is None:
             continue
+
         norm_chats.append(
             {
                 "id": int(chat.get("id")),
@@ -66,6 +68,7 @@ def _normalize_group(group: Dict[str, Any]) -> Dict[str, Any]:
                 "added_by_account_id": chat.get("added_by_account_id"),
             }
         )
+
     g["chats"] = norm_chats
     return g
 
@@ -74,8 +77,10 @@ def load_groups() -> List[Dict[str, Any]]:
     _ensure_dir()
     if not os.path.exists(GROUPS_PATH):
         return []
+
     with open(GROUPS_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
+
     return [_normalize_group(g) for g in (data or []) if isinstance(g, dict)]
 
 
@@ -117,6 +122,7 @@ def create_group(name: str) -> None:
         raise ValueError("Пустое имя группы")
     if get_group(name):
         raise ValueError("Такая группа уже существует")
+
     upsert_group({"name": name, "enabled": True, "keywords": [], "chats": []})
 
 
@@ -124,6 +130,7 @@ def set_group_enabled(name: str, enabled: bool) -> None:
     g = get_group(name)
     if not g:
         raise ValueError("Группа не найдена")
+
     g["enabled"] = bool(enabled)
     upsert_group(g)
 
@@ -179,6 +186,7 @@ def set_keyword_active(group_name: str, phrase: str, active: bool) -> bool:
     if changed:
         g["keywords"] = kws
         upsert_group(g)
+
     return changed
 
 
@@ -242,17 +250,20 @@ def set_chat_active(chat_id: int, active: bool) -> int:
 
     if changed:
         save_groups(groups)
-    return changed
 
+    return changed
 
 
 def remove_chat_everywhere(chat_id: int) -> int:
     groups = load_groups()
     removed = 0
+
     for g in groups:
         before = len(g.get("chats") or [])
         g["chats"] = [c for c in (g.get("chats") or []) if c.get("id") != int(chat_id)]
         removed += max(0, before - len(g["chats"]))
+
     if removed:
         save_groups(groups)
+
     return removed
